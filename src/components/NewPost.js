@@ -1,21 +1,15 @@
 import React, { useEffect, useRef, useState } from "react";
-import * as faceapi from "face-api.js";
-import { v4 as uuidv4 } from "uuid";
+import * as tf from "@tensorflow/tfjs";
+import * as faceDetection from "@tensorflow-models/face-detection";
 
-const TINY_FACE_DETECTOR = "tiny_face_detector";
-const SSD_MOBILENETV1 = "ssd_mobilenetv1";
-const selectedFaceDetector = SSD_MOBILENETV1;
+const estimationConfig = { flipHorizontal: false };
 
-// ssd_mobilenetv1 options
-const minConfidence = 0.5;
-
-// tiny_face_detector options
-const inputSize = 512;
-const scoreThreshold = 0.5;
-
-const NewPost = ({ images, reset, setLoading }) => {
+const NewPost = ({ images, reset, setLoading, setList }) => {
   const imgRef = useRef();
-  const [isLoaded, setLoaded] = useState(false);
+  const [detector, setDetector] = useState();
+  const [model, setModel] = useState();
+
+  const [modelsLoaded, setModelsLoaded] = useState(false);
 
   const detectEmotion = (detection) => {
     if (!detection) return;
@@ -52,40 +46,91 @@ const NewPost = ({ images, reset, setLoading }) => {
       value = expressions.neutral;
     }
 
-    return type == 'happy';
-  };
-
-  const getFaceDetectorOptions = () => {
-    return selectedFaceDetector === SSD_MOBILENETV1
-      ? new faceapi.SsdMobilenetv1Options({ minConfidence })
-      : new faceapi.TinyFaceDetectorOptions({ inputSize, scoreThreshold });
+    return type;
   };
 
   const detectImage = async (input) => {
-    const options = getFaceDetectorOptions();
+    let emotion = null;
 
-    const detections = await faceapi
-      .detectSingleFace(input, options)
-      .withFaceExpressions();
+    const detection = await detector.estimateFaces(input, estimationConfig);
 
-    const link = document.createElement("a");
+    if (detection.length > 0) {
+      const box = detection[0].box;
 
-    link.href = input.src;
+      const face_canvas = document.createElement("canvas");
+      const face_canvas_ctx = face_canvas.getContext("2d");
+      face_canvas_ctx.width = box.width;
+      face_canvas_ctx.height = box.height;
 
-    const isHappy = detectEmotion(detections);
-    console.log('isHappy', isHappy)
-    if(isHappy) {
-      link.setAttribute("download", input.name);
-      link.setAttribute("target", "_blank");
-      link.click();
+      face_canvas_ctx.drawImage(
+        input,
+        box.xMin,
+        box.yMin,
+        box.width,
+        box.height,
+        0,
+        0,
+        box.width,
+        box.height
+      );
+
+      const tensor = tf.tidy(() => {
+        const img = tf.browser.fromPixels(face_canvas);
+
+        const normalizationOffset = tf.scalar(255 / 2);
+        const tensor = img
+          .resizeNearestNeighbor([112, 112])
+          .toFloat()
+          .sub(normalizationOffset)
+          .div(normalizationOffset)
+          .reverse(2)
+          .expandDims();
+        return tensor;
+      });
+
+      const predictions = await model.predict(tensor);
+
+      const predict = predictions.dataSync();
+
+      tensor.dispose();
+      predictions.dispose();
+
+      const expressions = {
+        angry: predict[0],
+        disgusted: predict[1],
+        fearful: predict[2],
+        happy: predict[3],
+        neutral: predict[4],
+        sad: predict[5],
+        surprised: predict[6],
+      };
+
+      const result = { expressions: expressions };
+
+      emotion = detectEmotion(result);
+    } else {
+      emotion = "null";
     }
+
+    console.log("emotion", input.name, emotion);
+    setList((prev) => [
+      ...prev,
+      {
+        image: input.name,
+        emotion,
+      },
+    ]);
   };
 
   const handleImage = async () => {
     for (let item of images) {
-      imgRef.current.src = item.url;
-      imgRef.current.name = item.name;
-      await detectImage(imgRef.current);
+      let image = new Image();
+      image.src = item.url;
+      image.name = item.name;
+
+      image.addEventListener("load", async (event) => {
+        await detectImage(image);
+      });
     }
 
     // // await Promise.all([listPromise]);
@@ -93,42 +138,40 @@ const NewPost = ({ images, reset, setLoading }) => {
     reset();
   };
 
-  const getCurrentFaceDetectionNet = () => {
-    if (selectedFaceDetector === SSD_MOBILENETV1) {
-      return faceapi.nets.ssdMobilenetv1;
-    }
-    if (selectedFaceDetector === TINY_FACE_DETECTOR) {
-      return faceapi.nets.tinyFaceDetector;
-    }
-  };
-
-  const isFaceDetectionModelLoaded = () => {
-    return !!getCurrentFaceDetectionNet().params;
-  };
-
   useEffect(() => {
     const loadModels = async () => {
-      if (!isFaceDetectionModelLoaded()) {
-        await getCurrentFaceDetectionNet().load("/models");
-      }
+      const face_detect = faceDetection.SupportedModels.MediaPipeFaceDetector;
+      const detectorConfig = {
+        runtime: "mediapipe",
+        solutionPath: "https://cdn.jsdelivr.net/npm/@mediapipe/face_detection",
+      };
 
-      const MODEL_URL = "/models";
-      await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
+      const detector = await faceDetection.createDetector(
+        face_detect,
+        detectorConfig
+      );
 
-      setLoaded(true);
+      const model = await tf.loadLayersModel("/models/model.json");
+      // model.summary();
+
+      setDetector(detector);
+      setModel(model);
+
+      setModelsLoaded(true);
     };
     loadModels();
   }, []);
 
   useEffect(() => {
-    if (!images || !images.length || !isLoaded) return;
+    if (!images || !images.length || !modelsLoaded || !detector || !model)
+      return;
 
     handleImage();
-  }, [images, isLoaded]);
+  }, [images, detector, model, modelsLoaded]);
 
   return (
     <div>
-      <img ref={imgRef} crossOrigin="anonymous" alt="" />
+      <img ref={imgRef} crossOrigin="anonymous" alt="" />;
     </div>
   );
 };

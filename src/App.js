@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import NewPost from "./components/NewPost";
 import "./App.css";
+import { CSVLink } from "react-csv";
 
 function App() {
   const [images, setImages] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [list, setList] = useState([]);
 
   const imgRef = useRef();
 
   // useEffect(() => {
-    
+
   // }, [files]);
 
   const reset = () => {
@@ -18,7 +20,7 @@ function App() {
   };
 
   const onChange = (files) => {
-    console.log('files', files);
+    console.log("files", files);
     const getImage = () => {
       let newImages = [];
       for (let item of files) {
@@ -37,7 +39,7 @@ function App() {
     };
 
     files && files.length && getImage();
-  }
+  };
 
   return (
     <div>
@@ -62,8 +64,22 @@ function App() {
           </div>
         </div>
       </div>
+      <CSVLink
+        data={list}
+        headers={[
+          { label: "image", key: "image" },
+          { label: "emotion", key: "emotion" },
+        ]}
+      >
+        Download me
+      </CSVLink>
       {images && images.length && (
-        <NewPost images={images} reset={reset} setLoading={setLoading} />
+        <NewPost
+          images={images}
+          reset={reset}
+          setLoading={setLoading}
+          setList={setList}
+        />
       )}
     </div>
   );
